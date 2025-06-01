@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Scan, Plus, Minus, Building2, FileSpreadsheet, Camera, LogOut } from 'lucide-react';
+import { Package, Scan, Plus, Minus, Building2, FileSpreadsheet, Camera, LogOut, CheckCircle, XCircle } from 'lucide-react';
 import { airtableService } from './services/airtable';
 import { Html5QrcodeScanner } from "html5-qrcode";
 import './App.css';
@@ -14,6 +14,7 @@ function App() {
   const [formData, setFormData] = useState({});
   const [scannedCode, setScannedCode] = useState('');
   const [isScanning, setIsScanning] = useState(false);
+  const [lastAction, setLastAction] = useState(null);
 
   const roles = ['PM', 'GM', 'Chop Driver', 'Lead Installer'];
   const colors = ['White', 'Brown', 'Coal Gray', 'Musket Brown', 'Eggshell', 'Wicker', 'Cream', 'Clay', 'Tan', 'Terratone', 'Ivory', 'Light Gray', 'Red', 'Green'];
@@ -22,14 +23,6 @@ function App() {
   useEffect(() => {
     loadWarehouses();
   }, []);
-  
-
-  // Load inventory when warehouse is selected
-  useEffect(() => {
-    if (warehouse) {
-      loadInventory();
-    }
-  }, [warehouse]);
 
   const loadWarehouses = async () => {
     try {
@@ -71,18 +64,6 @@ function App() {
     }
   }, [isScanning]);
 
-  const loadInventory = async () => {
-    setLoading(true);
-    try {
-      const items = await airtableService.getWarehouseItems(warehouse);
-      setInventory(items);
-    } catch (error) {
-      console.error('Error loading inventory:', error);
-      alert('Error loading inventory. Please check your connection.');
-    }
-    setLoading(false);
-  };
-
   const handleScan = async (code) => {
     setScannedCode(code);
     setLoading(true);
@@ -115,10 +96,11 @@ function App() {
         ...formData,
         lastUpdatedBy: user
       });
-      await loadInventory();
       setShowModal('');
       setFormData({});
-      alert('Item added successfully!');
+      setScannedCode('');
+      setLastAction({ type: 'success', message: `Item ${formData.itemNumber} added successfully!` });
+      setTimeout(() => setLastAction(null), 5000);
     } catch (error) {
       console.error('Error saving item:', error);
       alert('Error saving item. Please try again.');
@@ -137,10 +119,15 @@ function App() {
     setLoading(true);
     try {
       await airtableService.updateItemQuantity(formData.id, newQuantity, user);
-      await loadInventory();
       setShowModal('');
+      const action = type === 'in' ? 'checked in' : 'checked out';
+      setLastAction({ 
+        type: 'success', 
+        message: `${formData.itemNumber}: ${qty} items ${action}. New quantity: ${newQuantity}` 
+      });
       setFormData({});
-      alert(`Successfully ${type === 'in' ? 'checked in' : 'checked out'} ${qty} items!`);
+      setScannedCode('');
+      setTimeout(() => setLastAction(null), 5000);
     } catch (error) {
       console.error('Error updating inventory:', error);
       alert('Error updating inventory. Please try again.');
@@ -148,19 +135,29 @@ function App() {
     setLoading(false);
   };
 
-  const exportData = () => {
-    let csv = 'QR Code,Item Number,Description,Color,Quantity,Last Updated,Last Updated By\n';
-    inventory.forEach(item => {
-      csv += `${item.qrCode},${item.itemNumber},${item.description},${item.color},${item.quantity},${item.lastUpdated || ''},${item.lastUpdatedBy || ''}\n`;
-    });
-    
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `inventory-${warehouse}-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const exportData = async () => {
+    setLoading(true);
+    try {
+      // Load fresh inventory data for export
+      const items = await airtableService.getWarehouseItems(warehouse);
+      
+      let csv = 'QR Code,Item Number,Description,Color,Quantity,Last Updated,Last Updated By\n';
+      items.forEach(item => {
+        csv += `${item.qrCode},${item.itemNumber},${item.description},${item.color},${item.quantity},${item.lastUpdated || ''},${item.lastUpdatedBy || ''}\n`;
+      });
+      
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `inventory-${warehouse}-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error exporting data:', error);
+      alert('Error exporting data. Please try again.');
+    }
+    setLoading(false);
   };
 
   const addWarehouse = () => {
@@ -250,7 +247,7 @@ function App() {
     );
   }
 
-  // Main Inventory Screen
+  // Main Scanner Screen - Simplified
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -266,189 +263,204 @@ function App() {
                 <p className="text-sm text-gray-600 mobile-text">User: {user}</p>
               </div>
             </div>
-            <button onClick={exportData} className="flex items-center bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 mobile-text">
+            <button onClick={exportData} disabled={loading} className="flex items-center bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 mobile-text disabled:opacity-50">
               <FileSpreadsheet className="w-4 h-4 mr-2" />
-              Export
+              {loading ? 'Exporting...' : 'Export'}
             </button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto mobile-padding py-6">
-        {/* Scanner Section */}
-  <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-    <div className="text-center mb-6">
-      <div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4">
-        <Scan className="w-8 h-8 text-blue-600" />
-      </div>
-      <h2 className="text-xl font-semibold text-gray-900 mb-2">Scan QR Code</h2>
-      <p className="text-gray-600 mobile-text">Use camera or enter code manually</p>
-    </div>
-  
-    <div className="flex flex-col items-center gap-4">
-      {!isScanning ? (
-        <>
-          <button 
-            onClick={() => setIsScanning(true)}
-            className="flex items-center bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700"
-          >
-            <Camera className="w-5 h-5 mr-2" />
-            Start Camera
-          </button>
-        
-          <div className="flex gap-2 w-full max-w-md">
-            <input
-              type="text"
-              placeholder="Enter QR code manually"
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              value={scannedCode}
-              onChange={(e) => setScannedCode(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter' && scannedCode) {
-                  handleScan(scannedCode);
-                }
-              }}
-            />
-            <button 
-              onClick={() => scannedCode && handleScan(scannedCode)}
-              disabled={!scannedCode || loading}
-              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-            >
-              {loading ? 'Loading...' : 'Search'}
-            </button>
+      <div className="max-w-2xl mx-auto mobile-padding py-6">
+        {/* Last Action Notification */}
+        {lastAction && (
+          <div className={`mb-6 p-4 rounded-xl flex items-center gap-3 ${
+            lastAction.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+          }`}>
+            {lastAction.type === 'success' ? 
+              <CheckCircle className="w-5 h-5 flex-shrink-0" /> : 
+              <XCircle className="w-5 h-5 flex-shrink-0" />
+            }
+            <p className="font-medium">{lastAction.message}</p>
           </div>
-        </>
-      ) : (
-        <div className="w-full max-w-md">
-          <div id="qr-reader" className="w-full"></div>
-          <button 
-            onClick={() => setIsScanning(false)}
-            className="mt-4 w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600"
-          >
-            Cancel Scanning
-          </button>
-        </div>
-      )}
-    </div>
-  </div>
+        )}
 
-        {/* Inventory List */}
-        <div className="bg-white rounded-2xl shadow-lg p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Current Inventory</h2>
-          {loading && <p className="text-gray-500 text-center">Loading inventory...</p>}
-          {!loading && inventory.length === 0 ? (
-            <div className="text-center py-12">
-              <div className="bg-gray-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <Package className="w-8 h-8 text-gray-400" />
-              </div>
-              <p className="text-gray-500">No items yet. Start by scanning a QR code!</p>
+        {/* Scanner Section - Now the main focus */}
+        <div className="bg-white rounded-2xl shadow-lg p-8">
+          <div className="text-center mb-8">
+            <div className="bg-blue-100 w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Scan className="w-10 h-10 text-blue-600" />
             </div>
-          ) : (
-            <div className="grid gap-4">
-              {inventory.map((item) => (
-                <div key={item.id} className="flex items-center justify-between p-4 border border-gray-200 rounded-xl hover:border-gray-300 transition-colors">
-                  <div className="flex-1">
-                    <div className="flex flex-wrap items-center gap-2 mb-2">
-                      <span className="text-xs bg-gray-100 px-2 py-1 rounded-md">{item.qrCode}</span>
-                      <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-md">{item.itemNumber}</span>
-                      <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-md">{item.color}</span>
-                    </div>
-                    <p className="font-medium text-gray-900 mb-1">{item.description}</p>
-                    <p className="text-sm text-gray-600 mobile-text">
-                      Updated {item.lastUpdated ? new Date(item.lastUpdated).toLocaleDateString() : 'N/A'} by {item.lastUpdatedBy || 'Unknown'}
-                    </p>
-                  </div>
-                  <div className="text-right ml-4">
-                    <p className="text-2xl font-bold text-gray-900">{item.quantity}</p>
-                    <p className="text-xs text-gray-500">in stock</p>
+            <h2 className="text-2xl font-semibold text-gray-900 mb-2">Scan QR Code</h2>
+            <p className="text-gray-600">Scan to check in/out items or add new inventory</p>
+          </div>
+          
+          <div className="flex flex-col items-center gap-6">
+            {!isScanning ? (
+              <>
+                <button 
+                  onClick={() => setIsScanning(true)}
+                  className="flex items-center bg-blue-600 text-white px-8 py-4 rounded-xl hover:bg-blue-700 text-lg font-medium shadow-lg hover:shadow-xl transition-all"
+                >
+                  <Camera className="w-6 h-6 mr-3" />
+                  Start Camera Scanner
+                </button>
+                
+                <div className="w-full max-w-md">
+                  <p className="text-sm text-gray-500 text-center mb-3">Or enter code manually:</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Enter QR code"
+                      className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg"
+                      value={scannedCode}
+                      onChange={(e) => setScannedCode(e.target.value)}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter' && scannedCode) {
+                          handleScan(scannedCode);
+                        }
+                      }}
+                    />
+                    <button 
+                      onClick={() => scannedCode && handleScan(scannedCode)}
+                      disabled={!scannedCode || loading}
+                      className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium"
+                    >
+                      {loading ? 'Loading...' : 'Search'}
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              </>
+            ) : (
+              <div className="w-full max-w-md">
+                <div id="qr-reader" className="w-full mb-4"></div>
+                <button 
+                  onClick={() => setIsScanning(false)}
+                  className="w-full bg-gray-500 text-white py-3 rounded-xl hover:bg-gray-600 font-medium"
+                >
+                  Cancel Scanning
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Modals */}
+      {/* Enhanced Modals with better visibility */}
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 transform scale-105">
             
             {/* Add Warehouse Modal */}
             {showModal === 'addwarehouse' && (
               <>
-                <h3 className="text-lg font-semibold mb-4">Add New Warehouse</h3>
+                <h3 className="text-2xl font-bold mb-6">Add New Warehouse</h3>
                 <input
                   type="text"
                   placeholder="Warehouse name"
-                  className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 mb-4"
+                  className="w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 mb-6"
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
                 />
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <button 
                     onClick={addWarehouse}
-                    className="flex-1 bg-blue-600 text-white py-2 rounded-xl hover:bg-blue-700"
+                    className="flex-1 bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 font-medium text-lg"
                   >
-                    Add
+                    Add Warehouse
                   </button>
-                  <button onClick={() => setShowModal('')} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-xl hover:bg-gray-400">
+                  <button onClick={() => {
+                    setShowModal('');
+                    setFormData({});
+                  }} className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium text-lg">
                     Cancel
                   </button>
                 </div>
               </>
             )}
 
-            {/* Item Form Modal */}
+            {/* Item Form Modal - For new items */}
             {showModal === 'item' && (
               <>
-                <h3 className="text-lg font-semibold mb-4">Add Item</h3>
-                <div className="space-y-3">
-                  <input type="text" placeholder="Item Number*" className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500" 
+                <h3 className="text-2xl font-bold mb-2">Add New Item</h3>
+                <p className="text-gray-600 mb-6">QR Code: <span className="font-mono bg-gray-100 px-2 py-1 rounded">{formData.qrCode}</span></p>
+                <div className="space-y-4">
+                  <input type="text" placeholder="Item Number*" className="w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500" 
                     value={formData.itemNumber || ''} onChange={(e) => setFormData({...formData, itemNumber: e.target.value})} />
-                  <input type="text" placeholder="Description*" className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  <input type="text" placeholder="Description*" className="w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
                     value={formData.description || ''} onChange={(e) => setFormData({...formData, description: e.target.value})} />
-                  <input type="number" placeholder="Initial Quantity" className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  <input type="number" placeholder="Initial Quantity" className="w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
                     value={formData.quantity || ''} onChange={(e) => setFormData({...formData, quantity: parseInt(e.target.value) || 0})} />
-                  <select className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  <select className="w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
                     value={formData.color || ''} onChange={(e) => setFormData({...formData, color: e.target.value})}>
                     <option value="">Select Color*</option>
                     {colors.map(color => <option key={color} value={color}>{color}</option>)}
                   </select>
                 </div>
-                <div className="flex gap-2 mt-4">
-                  <button onClick={saveItem} disabled={loading} className="flex-1 bg-blue-600 text-white py-2 rounded-xl hover:bg-blue-700 disabled:opacity-50">
-                    {loading ? 'Saving...' : 'Save'}
+                <div className="flex gap-3 mt-6">
+                  <button onClick={saveItem} disabled={loading} className="flex-1 bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium text-lg">
+                    {loading ? 'Saving...' : 'Save Item'}
                   </button>
-                  <button onClick={() => setShowModal('')} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-xl hover:bg-gray-400">Cancel</button>
+                  <button onClick={() => {
+                    setShowModal('');
+                    setFormData({});
+                    setScannedCode('');
+                  }} className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium text-lg">
+                    Cancel
+                  </button>
                 </div>
               </>
             )}
 
-            {/* Check In/Out Modal */}
+            {/* Check In/Out Modal - Enhanced visibility */}
             {showModal === 'checkinout' && (
               <>
-                <h3 className="text-lg font-semibold mb-2">{formData.description}</h3>
-                <p className="text-gray-600 mb-4">Current: <strong>{formData.quantity}</strong></p>
-                <div className="flex gap-2 mb-4">
+                <div className="text-center mb-6">
+                  <h3 className="text-2xl font-bold mb-2">{formData.description}</h3>
+                  <p className="text-gray-600">Item: <span className="font-mono">{formData.itemNumber}</span></p>
+                  <p className="text-gray-600">QR: <span className="font-mono">{formData.qrCode}</span></p>
+                  <div className="mt-4 bg-gray-100 rounded-xl p-4">
+                    <p className="text-sm text-gray-600">Current Quantity</p>
+                    <p className="text-4xl font-bold text-gray-900">{formData.quantity}</p>
+                  </div>
+                </div>
+                
+                <div className="flex gap-3 mb-6">
                   <button onClick={() => setFormData({...formData, type: 'in'})} 
-                    className={`flex-1 py-2 rounded-xl flex items-center justify-center ${formData.type === 'in' ? 'bg-green-600 text-white' : 'bg-gray-100'}`}>
-                    <Plus className="w-4 h-4 mr-1" />Check In
+                    className={`flex-1 py-4 rounded-xl flex items-center justify-center text-lg font-medium transition-all ${
+                      formData.type === 'in' ? 'bg-green-600 text-white shadow-lg' : 'bg-gray-100 hover:bg-gray-200'
+                    }`}>
+                    <Plus className="w-6 h-6 mr-2" />Check In
                   </button>
                   <button onClick={() => setFormData({...formData, type: 'out'})}
-                    className={`flex-1 py-2 rounded-xl flex items-center justify-center ${formData.type === 'out' ? 'bg-red-600 text-white' : 'bg-gray-100'}`}>
-                    <Minus className="w-4 h-4 mr-1" />Check Out
+                    className={`flex-1 py-4 rounded-xl flex items-center justify-center text-lg font-medium transition-all ${
+                      formData.type === 'out' ? 'bg-red-600 text-white shadow-lg' : 'bg-gray-100 hover:bg-gray-200'
+                    }`}>
+                    <Minus className="w-6 h-6 mr-2" />Check Out
                   </button>
                 </div>
+                
                 {formData.type && (
                   <>
-                    <input type="number" min="1" placeholder="Enter quantity" className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 mb-4"
-                      onChange={(e) => setFormData({...formData, qty: e.target.value})} />
-                    <div className="flex gap-2">
+                    <input 
+                      type="number" 
+                      min="1" 
+                      placeholder={`Enter quantity to ${formData.type === 'in' ? 'add' : 'remove'}`}
+                      className="w-full p-4 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 mb-6"
+                      onChange={(e) => setFormData({...formData, qty: e.target.value})}
+                      autoFocus
+                    />
+                    <div className="flex gap-3">
                       <button onClick={() => updateInventory(formData.type, formData.qty)} disabled={loading}
-                        className="flex-1 bg-blue-600 text-white py-2 rounded-xl hover:bg-blue-700 disabled:opacity-50">
+                        className="flex-1 bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium text-lg">
                         {loading ? 'Updating...' : 'Confirm'}
                       </button>
-                      <button onClick={() => setShowModal('')} className="flex-1 bg-gray-300 text-gray-700 py-2 rounded-xl hover:bg-gray-400">Cancel</button>
+                      <button onClick={() => {
+                        setShowModal('');
+                        setFormData({});
+                        setScannedCode('');
+                      }} className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium text-lg">
+                        Cancel
+                      </button>
                     </div>
                   </>
                 )}
