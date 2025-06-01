@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Package, Scan, Plus, Minus, Building2, FileSpreadsheet, Camera, LogOut } from 'lucide-react';
 import { airtableService } from './services/airtable';
+import { Html5QrcodeScanner } from "html5-qrcode";
 import './App.css';
 
 function App() {
@@ -12,6 +13,7 @@ function App() {
   const [showModal, setShowModal] = useState('');
   const [formData, setFormData] = useState({});
   const [scannedCode, setScannedCode] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
 
   const roles = ['PM', 'GM', 'Chop Driver', 'Lead Installer'];
   const colors = ['White', 'Brown', 'Coal Gray', 'Musket Brown', 'Eggshell', 'Wicker', 'Cream', 'Clay', 'Tan', 'Terratone', 'Ivory', 'Light Gray', 'Red', 'Green'];
@@ -20,6 +22,7 @@ function App() {
   useEffect(() => {
     loadWarehouses();
   }, []);
+  
 
   // Load inventory when warehouse is selected
   useEffect(() => {
@@ -37,6 +40,36 @@ function App() {
       setWarehouses(['Main Warehouse']);
     }
   };
+  
+  // QR Scanner Effect
+  useEffect(() => {
+    if (isScanning) {
+      const scanner = new Html5QrcodeScanner(
+        "qr-reader",
+        { 
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+          aspectRatio: 1.0
+        },
+        false
+      );
+
+      scanner.render(
+        (decodedText) => {
+          scanner.clear();
+          setIsScanning(false);
+          handleScan(decodedText);
+        },
+        (error) => {
+          console.warn(error);
+        }
+      );
+
+      return () => {
+        scanner.clear();
+      };
+    }
+  }, [isScanning]);
 
   const loadInventory = async () => {
     setLoading(true);
@@ -243,53 +276,61 @@ function App() {
 
       <div className="max-w-6xl mx-auto mobile-padding py-6">
         {/* Scanner Section */}
-        <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-          <div className="text-center mb-6">
-            <div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <Scan className="w-8 h-8 text-blue-600" />
-            </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">Scan QR Code</h2>
-            <p className="text-gray-600 mobile-text">Use camera or enter code manually</p>
-          </div>
-          
-          <div className="flex flex-col items-center gap-4">
+  <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
+    <div className="text-center mb-6">
+      <div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4">
+        <Scan className="w-8 h-8 text-blue-600" />
+      </div>
+      <h2 className="text-xl font-semibold text-gray-900 mb-2">Scan QR Code</h2>
+      <p className="text-gray-600 mobile-text">Use camera or enter code manually</p>
+    </div>
+  
+    <div className="flex flex-col items-center gap-4">
+      {!isScanning ? (
+        <>
+          <button 
+            onClick={() => setIsScanning(true)}
+            className="flex items-center bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700"
+          >
+            <Camera className="w-5 h-5 mr-2" />
+            Start Camera
+          </button>
+        
+          <div className="flex gap-2 w-full max-w-md">
+            <input
+              type="text"
+              placeholder="Enter QR code manually"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              value={scannedCode}
+              onChange={(e) => setScannedCode(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && scannedCode) {
+                  handleScan(scannedCode);
+                }
+              }}
+            />
             <button 
-              onClick={() => alert('Camera feature would be implemented with QR library')}
-              className="flex items-center bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700"
+              onClick={() => scannedCode && handleScan(scannedCode)}
+              disabled={!scannedCode || loading}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
-              <Camera className="w-5 h-5 mr-2" />
-              Start Camera
+              {loading ? 'Loading...' : 'Search'}
             </button>
-            
-            <div className="text-center">
-              <p className="text-sm text-gray-600 mb-2">Demo codes:</p>
-              <div className="flex flex-wrap gap-2 justify-center">
-                {['QR001', 'QR002', 'QR003'].map(code => (
-                  <button key={code} onClick={() => handleScan(code)} className="px-3 py-1 bg-blue-100 text-blue-800 rounded-lg text-sm hover:bg-blue-200">
-                    {code}
-                  </button>
-                ))}
-              </div>
-            </div>
-            
-            <div className="flex gap-2 w-full max-w-md">
-              <input
-                type="text"
-                placeholder="Enter QR code"
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                value={scannedCode}
-                onChange={(e) => setScannedCode(e.target.value)}
-              />
-              <button 
-                onClick={() => scannedCode && handleScan(scannedCode)}
-                disabled={!scannedCode || loading}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              >
-                {loading ? 'Loading...' : 'Scan'}
-              </button>
-            </div>
           </div>
+        </>
+      ) : (
+        <div className="w-full max-w-md">
+          <div id="qr-reader" className="w-full"></div>
+          <button 
+            onClick={() => setIsScanning(false)}
+            className="mt-4 w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600"
+          >
+            Cancel Scanning
+          </button>
         </div>
+      )}
+    </div>
+  </div>
 
         {/* Inventory List */}
         <div className="bg-white rounded-2xl shadow-lg p-6">
@@ -341,7 +382,7 @@ function App() {
                   type="text"
                   placeholder="Warehouse name"
                   className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 mb-4"
-                  onChange={(e) => setFormData({name: e.target.value})}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
                 />
                 <div className="flex gap-2">
                   <button 
