@@ -115,6 +115,12 @@ function App() {
     const newQuantity = type === 'in' 
       ? formData.quantity + qtyNum 
       : Math.max(0, formData.quantity - qtyNum);
+	  //debugger
+	console.log('Updating inventory:',{
+		recordId: formData.id,
+		newQuantity: newQuantity,
+		formData: formData
+	});
 
     setLoading(true);
     try {
