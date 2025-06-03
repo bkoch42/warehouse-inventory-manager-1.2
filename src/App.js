@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Package, Scan, Plus, Minus, Building2, FileSpreadsheet, Camera, LogOut, CheckCircle, XCircle, ClipboardList, User } from 'lucide-react';
+import { Package, Scan, Plus, Minus, Building2, FileSpreadsheet, Camera, LogOut, CheckCircle, XCircle, ClipboardList, User, UserPlus, ChevronRight, AlertCircle } from 'lucide-react';
 import { airtableService } from './services/airtable';
 import { Html5QrcodeScanner } from "html5-qrcode";
 import './App.css';
 
 function App() {
-  const [user, setUser] = useState('');
-  const [userName, setUserName] = useState('');
+  const [userRole, setUserRole] = useState('');
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [users, setUsers] = useState([]);
   const [warehouse, setWarehouse] = useState('');
   const [warehouses, setWarehouses] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -14,30 +15,39 @@ function App() {
   const [formData, setFormData] = useState({});
   const [scannedCode, setScannedCode] = useState('');
   const [isScanning, setIsScanning] = useState(false);
-  const [lastAction, setLastAction] = useState(null);
   const [confirmationData, setConfirmationData] = useState(null);
+  const [currentView, setCurrentView] = useState('scanner');
   const [packoutSheets, setPackoutSheets] = useState([]);
-  const [currentView, setCurrentView] = useState('scanner'); // scanner, packout
+  const [selectedPackout, setSelectedPackout] = useState(null);
 
   const roles = ['PM', 'GM', 'Chop Driver', 'Lead Installer'];
   const colors = ['White', 'Brown', 'Coal Gray', 'Musket Brown', 'Eggshell', 'Wicker', 'Cream', 'Clay', 'Tan', 'Terratone', 'Ivory', 'Light Gray', 'Red', 'Green'];
   
-  // Common items for packout sheets
   const packoutItems = [
-    'A Elbows', 'B Elbows', 'C Elbows', 'Downspout', 
+    'A Elbows', 'B Elbows', 'C Elbows', 'Downspout', 'Downspout Elbows',
     'Fascia', 'J-Channel', 'Starter Strip', 'Corner Post',
-    'Window Trim', 'Door Trim', 'Soffit', 'F-Channel'
+    'Window Trim', 'Door Trim', 'Soffit', 'F-Channel',
+    'Drip Cap', 'Utility Trim', 'Undersill Trim'
   ];
 
   // Load warehouses on mount
   useEffect(() => {
     loadWarehouses();
-    // Load saved user name
-    const savedUserName = localStorage.getItem(`userName_${user}`);
-    if (savedUserName) {
-      setUserName(savedUserName);
+  }, []);
+
+  // Load users when role is selected
+  useEffect(() => {
+    if (userRole) {
+      loadUsers();
     }
-  }, [user]);
+  }, [userRole]);
+
+  // Load packout sheets when view changes
+  useEffect(() => {
+    if (currentView === 'packout' && warehouse) {
+      loadPackoutSheets();
+    }
+  }, [currentView, warehouse]);
 
   const loadWarehouses = async () => {
     try {
@@ -47,6 +57,46 @@ function App() {
       console.error('Error loading warehouses:', error);
       setWarehouses(['Main Warehouse']);
     }
+  };
+
+  const loadUsers = async () => {
+    setLoading(true);
+    try {
+      const userList = await airtableService.getUsers(userRole);
+      setUsers(userList);
+      if (userList.length === 0) {
+        setShowModal('createUser');
+      } else {
+        setShowModal('selectUser');
+      }
+    } catch (error) {
+      console.error('Error loading users:', error);
+      setShowModal('createUser');
+    }
+    setLoading(false);
+  };
+
+  const loadPackoutSheets = async () => {
+    setLoading(true);
+    try {
+      let sheets = [];
+      if (userRole === 'Chop Driver') {
+        // Show pending and completed sheets
+        const pending = await airtableService.getPackoutSheets('pending_installer', warehouse);
+        const completed = await airtableService.getPackoutSheets('completed', warehouse);
+        sheets = [...pending, ...completed];
+      } else if (userRole === 'Lead Installer') {
+        // Show only pending installer sheets
+        sheets = await airtableService.getPackoutSheets('pending_installer', warehouse);
+      } else {
+        // GM and PM see all
+        sheets = await airtableService.getPackoutSheets(null, warehouse);
+      }
+      setPackoutSheets(sheets);
+    } catch (error) {
+      console.error('Error loading packout sheets:', error);
+    }
+    setLoading(false);
   };
   
   // QR Scanner Effect
@@ -89,7 +139,7 @@ function App() {
         setFormData({ ...item, qrCode: code });
         setShowModal('checkinout');
       } else {
-        setFormData({ qrCode: code, itemNumber: '', description: '', quantity: 0, color: '', warehouse });
+        setFormData({ qrCode: code, itemNumber: '', description: '', quantity: 0, color: '', warehouse, boxQuantity: 12 });
         setShowModal('item');
       }
     } catch (error) {
@@ -118,10 +168,9 @@ function App() {
     try {
       await airtableService.createItem({
         ...formData,
-        lastUpdatedBy: userName || user
+        lastUpdatedBy: selectedUser.name
       });
       
-      // Show confirmation
       const { boxes, pieces } = calculateBoxesAndPieces(formData.quantity, formData.boxQuantity || 12);
       setConfirmationData({
         action: 'created',
@@ -152,9 +201,8 @@ function App() {
 
     setLoading(true);
     try {
-      await airtableService.updateItemQuantity(formData.id, newQuantity, userName || user);
+      await airtableService.updateItemQuantity(formData.id, newQuantity, selectedUser.name);
       
-      // Calculate boxes and pieces for confirmation
       const { boxes, pieces } = calculateBoxesAndPieces(newQuantity, formData.boxQuantity || 12);
       const { boxes: oldBoxes, pieces: oldPieces } = calculateBoxesAndPieces(formData.quantity, formData.boxQuantity || 12);
       
@@ -206,37 +254,84 @@ function App() {
     setLoading(false);
   };
 
-  // User Name Modal
-  const UserNameModal = () => (
+  // User Selection Modal
+  const UserSelectionModal = () => (
+    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 max-h-[80vh] overflow-y-auto">
+        <div className="flex items-center mb-4">
+          <User className="w-6 h-6 text-blue-600 mr-2" />
+          <h3 className="text-xl font-bold">Select User</h3>
+        </div>
+        <div className="space-y-2 mb-4">
+          {users.map(user => (
+            <button
+              key={user.id}
+              onClick={() => {
+                setSelectedUser(user);
+                setShowModal('');
+              }}
+              className="w-full p-3 text-left border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all"
+            >
+              <p className="font-medium">{user.name}</p>
+              <p className="text-sm text-gray-500">{user.role}</p>
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setShowModal('createUser')}
+          className="w-full p-3 border-2 border-dashed border-gray-300 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all flex items-center justify-center"
+        >
+          <UserPlus className="w-5 h-5 mr-2" />
+          Add New User
+        </button>
+      </div>
+    </div>
+  );
+
+  // Create User Modal
+  const CreateUserModal = () => (
     <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
       <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
         <div className="flex items-center mb-4">
-          <User className="w-6 h-6 text-blue-600 mr-2" />
-          <h3 className="text-xl font-bold">Enter Your Name</h3>
+          <UserPlus className="w-6 h-6 text-blue-600 mr-2" />
+          <h3 className="text-xl font-bold">Add New User</h3>
         </div>
         <input
           type="text"
-          placeholder={`${user} - Your Full Name`}
-          value={userName}
-          onChange={(e) => setUserName(e.target.value)}
+          placeholder="Enter full name"
+          value={formData.newUserName || ''}
+          onChange={(e) => setFormData({...formData, newUserName: e.target.value})}
           className="w-full p-3 text-lg border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 mb-4"
           autoFocus
         />
         <div className="flex gap-3">
           <button
-            onClick={() => {
-              localStorage.setItem(`userName_${user}`, userName);
-              setShowModal('');
+            onClick={async () => {
+              if (formData.newUserName) {
+                try {
+                  await airtableService.createUser({
+                    name: formData.newUserName,
+                    role: userRole
+                  });
+                  setFormData({});
+                  loadUsers();
+                } catch (error) {
+                  alert('Error creating user');
+                }
+              }
             }}
             className="flex-1 bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 font-medium"
           >
-            Save & Continue
+            Create User
           </button>
           <button
-            onClick={() => setShowModal('')}
+            onClick={() => {
+              setShowModal(users.length > 0 ? 'selectUser' : '');
+              setFormData({});
+            }}
             className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium"
           >
-            Skip
+            Cancel
           </button>
         </div>
       </div>
@@ -310,8 +405,148 @@ function App() {
     </div>
   );
 
-  // User Selection Screen
-  if (!user) {
+  // Packout Creation Modal
+  const PackoutCreationModal = () => {
+    const [step, setStep] = useState(1);
+    const [packoutData, setPackoutData] = useState({
+      jobNumber: '',
+      customerName: '',
+      jobColor: '',
+      items: packoutItems.map(item => ({ itemName: item, quantity: 0 }))
+    });
+
+    const createPackout = async () => {
+      setLoading(true);
+      try {
+        await airtableService.createPackoutSheet({
+          ...packoutData,
+          warehouse,
+          createdBy: selectedUser.name
+        });
+        setShowModal('');
+        loadPackoutSheets();
+        alert('Packout sheet created successfully!');
+      } catch (error) {
+        console.error('Error creating packout:', error);
+        alert('Error creating packout sheet');
+      }
+      setLoading(false);
+    };
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+          <h3 className="text-2xl font-bold mb-6">Create Packout Sheet</h3>
+          
+          {step === 1 && (
+            <>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Job Number</label>
+                  <input
+                    type="text"
+                    value={packoutData.jobNumber}
+                    onChange={(e) => setPackoutData({...packoutData, jobNumber: e.target.value})}
+                    className="w-full p-3 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter job number"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Customer Last Name</label>
+                  <input
+                    type="text"
+                    value={packoutData.customerName}
+                    onChange={(e) => setPackoutData({...packoutData, customerName: e.target.value})}
+                    className="w-full p-3 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter customer last name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Job Color</label>
+                  <select
+                    value={packoutData.jobColor}
+                    onChange={(e) => setPackoutData({...packoutData, jobColor: e.target.value})}
+                    className="w-full p-3 border-2 border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Select color</option>
+                    {colors.map(color => (
+                      <option key={color} value={color}>{color}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => {
+                    if (packoutData.jobNumber && packoutData.customerName && packoutData.jobColor) {
+                      setStep(2);
+                    } else {
+                      alert('Please fill all fields');
+                    }
+                  }}
+                  className="flex-1 bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 font-medium"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => setShowModal('')}
+                  className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+          
+          {step === 2 && (
+            <>
+              <div className="mb-4">
+                <p className="text-sm text-gray-600">Job: {packoutData.jobNumber} - {packoutData.customerName}</p>
+                <p className="text-sm text-gray-600">Color: {packoutData.jobColor}</p>
+              </div>
+              <div className="space-y-2 mb-6">
+                <p className="font-medium">Enter quantities for each item:</p>
+                {packoutData.items.map((item, index) => (
+                  <div key={item.itemName} className="flex items-center gap-4">
+                    <label className="flex-1 text-sm">{item.itemName}</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={item.quantity}
+                      onChange={(e) => {
+                        const newItems = [...packoutData.items];
+                        newItems[index].quantity = parseInt(e.target.value) || 0;
+                        setPackoutData({...packoutData, items: newItems});
+                      }}
+                      className="w-24 p-2 border border-gray-300 rounded-lg"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setStep(1)}
+                  className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={createPackout}
+                  disabled={loading}
+                  className="flex-1 bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 font-medium disabled:opacity-50"
+                >
+                  {loading ? 'Creating...' : 'Create Packout'}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Role Selection Screen
+  if (!userRole || !selectedUser) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
         <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl w-full max-w-md">
@@ -324,25 +559,23 @@ function App() {
           </div>
           <select 
             className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent mb-4"
-            value={user} 
-            onChange={(e) => setUser(e.target.value)}
+            value={userRole} 
+            onChange={(e) => setUserRole(e.target.value)}
           >
             <option value="">Choose your role</option>
             {roles.map(role => <option key={role} value={role}>{role}</option>)}
           </select>
           <button 
-            onClick={() => {
-              if (user) {
-                setUser(user);
-                setShowModal('userName');
-              }
-            }}
-            disabled={!user}
+            onClick={() => userRole && loadUsers()}
+            disabled={!userRole}
             className="w-full bg-blue-600 text-white py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium transition-colors"
           >
             Continue
           </button>
         </div>
+        
+        {showModal === 'selectUser' && <UserSelectionModal />}
+        {showModal === 'createUser' && <CreateUserModal />}
       </div>
     );
   }
@@ -360,12 +593,12 @@ function App() {
                 </div>
                 <div>
                   <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Select Warehouse</h1>
-                  <p className="text-sm sm:text-base text-gray-600">Welcome, {userName || user}</p>
+                  <p className="text-sm sm:text-base text-gray-600">Welcome, {selectedUser.name}</p>
                 </div>
               </div>
               <button onClick={() => {
-                setUser('');
-                setUserName('');
+                setUserRole('');
+                setSelectedUser(null);
               }} className="p-2 text-gray-400 hover:text-gray-600">
                 <LogOut className="w-5 h-5" />
               </button>
@@ -383,26 +616,13 @@ function App() {
                 </button>
               ))}
             </div>
-            
-            {user === 'Chop Driver' && (
-              <button
-                onClick={() => {
-                  setWarehouse(warehouses[0] || 'Main Warehouse');
-                  setCurrentView('packout');
-                }}
-                className="mt-6 w-full bg-orange-600 text-white py-4 rounded-xl hover:bg-orange-700 font-medium text-lg flex items-center justify-center"
-              >
-                <ClipboardList className="w-6 h-6 mr-2" />
-                Packout Sheets
-              </button>
-            )}
           </div>
         </div>
       </div>
     );
   }
 
-  // Main App with Navigation
+  // Main App
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -415,17 +635,17 @@ function App() {
               </button>
               <div>
                 <h1 className="text-lg sm:text-xl font-bold text-gray-900">{warehouse}</h1>
-                <p className="text-xs sm:text-sm text-gray-600">User: {userName || user}</p>
+                <p className="text-xs sm:text-sm text-gray-600">{selectedUser.name} ({userRole})</p>
               </div>
             </div>
             <div className="flex gap-2">
-              {(user === 'Chop Driver' || user === 'Lead Installer') && (
+              {(userRole === 'Chop Driver' || userRole === 'Lead Installer' || userRole === 'GM' || userRole === 'PM') && (
                 <button
                   onClick={() => setCurrentView(currentView === 'scanner' ? 'packout' : 'scanner')}
-                  className={`px-3 sm:px-4 py-2 rounded-lg font-medium text-sm sm:text-base ${
+                  className={`px-3 sm:px-4 py-2 rounded-lg font-medium text-sm sm:text-base transition-all ${
                     currentView === 'packout' 
-                      ? 'bg-orange-600 text-white' 
-                      : 'bg-gray-200 text-gray-700'
+                      ? 'bg-orange-600 text-white hover:bg-orange-700' 
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                   }`}
                 >
                   {currentView === 'packout' ? 'Scanner' : 'Packouts'}
@@ -447,18 +667,6 @@ function App() {
       {currentView === 'scanner' ? (
         // Scanner View
         <div className="max-w-2xl mx-auto p-4 py-6">
-          {lastAction && (
-            <div className={`mb-6 p-4 rounded-xl flex items-center gap-3 ${
-              lastAction.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-            }`}>
-              {lastAction.type === 'success' ? 
-                <CheckCircle className="w-5 h-5 flex-shrink-0" /> : 
-                <XCircle className="w-5 h-5 flex-shrink-0" />
-              }
-              <p className="font-medium text-sm sm:text-base">{lastAction.message}</p>
-            </div>
-          )}
-
           <div className="bg-white rounded-2xl shadow-lg p-6 sm:p-8">
             <div className="text-center mb-6 sm:mb-8">
               <div className="bg-blue-100 w-16 sm:w-20 h-16 sm:h-20 rounded-2xl flex items-center justify-center mx-auto mb-4">
@@ -519,19 +727,69 @@ function App() {
           </div>
         </div>
       ) : (
-        // Packout View - Placeholder for now
+        // Packout View
         <div className="max-w-4xl mx-auto p-4 py-6">
           <div className="bg-white rounded-2xl shadow-lg p-6">
-            <h2 className="text-2xl font-bold mb-4">Packout Sheets</h2>
-            <p className="text-gray-600">Packout sheet functionality coming soon...</p>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold">Packout Sheets</h2>
+              {userRole === 'Chop Driver' && (
+                <button
+                  onClick={() => setShowModal('createPackout')}
+                  className="bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700 font-medium flex items-center"
+                >
+                  <Plus className="w-5 h-5 mr-2" />
+                  New Packout
+                </button>
+              )}
+            </div>
+            
+            {loading ? (
+              <p className="text-center text-gray-500">Loading packout sheets...</p>
+            ) : packoutSheets.length === 0 ? (
+              <p className="text-center text-gray-500 py-12">No packout sheets found</p>
+            ) : (
+              <div className="space-y-4">
+                {packoutSheets.map(sheet => (
+                  <div
+                    key={sheet.id}
+                    className="border border-gray-200 rounded-xl p-4 hover:border-gray-300 transition-all"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-lg">Job #{sheet.jobNumber} - {sheet.customerName}</p>
+                        <p className="text-sm text-gray-600">Color: {sheet.jobColor}</p>
+                        <p className="text-sm text-gray-500">Created by {sheet.createdBy} on {new Date(sheet.createdAt).toLocaleDateString()}</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                          sheet.status === 'pending_installer' ? 'bg-yellow-100 text-yellow-800' :
+                          sheet.status === 'confirmed' ? 'bg-blue-100 text-blue-800' :
+                          'bg-green-100 text-green-800'
+                        }`}>
+                          {sheet.status === 'pending_installer' ? 'Pending Installer' :
+                           sheet.status === 'confirmed' ? 'Confirmed' : 'Completed'}
+                        </span>
+                        <button
+                          onClick={() => setSelectedPackout(sheet)}
+                          className="text-blue-600 hover:text-blue-800"
+                        >
+                          <ChevronRight className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Modals */}
-      {showModal === 'userName' && <UserNameModal />}
       {showModal === 'confirmation' && <ConfirmationModal />}
+      {showModal === 'createPackout' && <PackoutCreationModal />}
       
+      {/* Item Creation Modal */}
       {showModal === 'item' && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8 max-h-[90vh] overflow-y-auto">
@@ -568,6 +826,7 @@ function App() {
         </div>
       )}
 
+      {/* Check In/Out Modal with Fixed Button Highlighting */}
       {showModal === 'checkinout' && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 sm:p-8">
@@ -588,14 +847,18 @@ function App() {
             
             <div className="flex gap-3 mb-6">
               <button onClick={() => setFormData({...formData, type: 'in'})} 
-                className={`flex-1 py-3 sm:py-4 rounded-xl flex items-center justify-center text-base sm:text-lg font-medium transition-all ${
-                  formData.type === 'in' ? 'bg-green-600 text-white shadow-lg transform scale-105' : 'bg-gray-100 hover:bg-gray-200'
+                className={`flex-1 py-3 sm:py-4 rounded-xl flex items-center justify-center text-base sm:text-lg font-medium transition-all duration-200 ${
+                  formData.type === 'in' 
+                    ? 'bg-green-600 text-white shadow-lg transform scale-105 ring-2 ring-green-400' 
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                 }`}>
                 <Plus className="w-5 sm:w-6 h-5 sm:h-6 mr-2" />Check In
               </button>
               <button onClick={() => setFormData({...formData, type: 'out'})}
-                className={`flex-1 py-3 sm:py-4 rounded-xl flex items-center justify-center text-base sm:text-lg font-medium transition-all ${
-                  formData.type === 'out' ? 'bg-red-600 text-white shadow-lg transform scale-105' : 'bg-gray-100 hover:bg-gray-200'
+                className={`flex-1 py-3 sm:py-4 rounded-xl flex items-center justify-center text-base sm:text-lg font-medium transition-all duration-200 ${
+                  formData.type === 'out' 
+                    ? 'bg-red-600 text-white shadow-lg transform scale-105 ring-2 ring-red-400' 
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
                 }`}>
                 <Minus className="w-5 sm:w-6 h-5 sm:h-6 mr-2" />Check Out
               </button>
