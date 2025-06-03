@@ -24,11 +24,38 @@ function App() {
   const colors = ['White', 'Brown', 'Coal Gray', 'Musket Brown', 'Eggshell', 'Wicker', 'Cream', 'Clay', 'Tan', 'Terratone', 'Ivory', 'Light Gray', 'Red', 'Green'];
   
   const packoutItems = [
-    'A Elbows', 'B Elbows', 'C Elbows', 'Downspout', 'Downspout Elbows',
-    'Fascia', 'J-Channel', 'Starter Strip', 'Corner Post',
-    'Window Trim', 'Door Trim', 'Soffit', 'F-Channel',
-    'Drip Cap', 'Utility Trim', 'Undersill Trim'
+    { name: 'A Elbows', partNumber: '00128' },
+    { name: 'B Elbows', partNumber: '00129' },
+    { name: '30° Elbows', partNumber: '08118' },
+    { name: 'Downspout', partNumber: '01119' },
+    { name: 'Pipe Clips', partNumber: '00199' },
+    { name: 'Drain Defenders', partNumber: '08580' },
+    { name: 'Inside Miter', partNumber: '08532' },
+    { name: 'Outside Strip Miter', partNumber: '08601' },
+    { name: 'RH End Caps', partNumber: '08507' },
+    { name: 'LH End Caps', partNumber: '08502' },
+    { name: '2ft Inlines', partNumber: '08554' },
+    { name: 'BigMouths', partNumber: '08571' },
+    { name: 'Denny Wedges', partNumber: '0DW' }
   ];
+
+  // Color to letter mapping for part numbers
+  const colorToLetter = {
+    'White': 'E',
+    'Brown': 'C',
+    'Coal Gray': 'K',
+    'Musket Brown': 'M',
+    'Eggshell': 'S',
+    'Wicker': 'W',
+    'Cream': 'N',
+    'Clay': 'D',
+    'Tan': 'T',
+    'Terratone': 'U',
+    'Ivory': 'I',
+    'Light Gray': 'H',
+    'Red': 'R',
+    'Green': 'F'
+  };
 
   // Load warehouses on mount
   useEffect(() => {
@@ -81,10 +108,11 @@ function App() {
     try {
       let sheets = [];
       if (userRole === 'Chop Driver') {
-        // Show pending and completed sheets
+        // Show pending (to monitor) and confirmed (to process returns)
         const pending = await airtableService.getPackoutSheets('pending_installer', warehouse);
+        const confirmed = await airtableService.getPackoutSheets('confirmed', warehouse);
         const completed = await airtableService.getPackoutSheets('completed', warehouse);
-        sheets = [...pending, ...completed];
+        sheets = [...pending, ...confirmed, ...completed];
       } else if (userRole === 'Lead Installer') {
         // Show only pending installer sheets
         sheets = await airtableService.getPackoutSheets('pending_installer', warehouse);
@@ -412,7 +440,11 @@ function App() {
       jobNumber: '',
       customerName: '',
       jobColor: '',
-      items: packoutItems.map(item => ({ itemName: item, quantity: 0 }))
+      items: packoutItems.map(item => ({ 
+        itemName: item.name, 
+        partNumber: item.partNumber,
+        quantity: 0 
+      }))
     });
 
     const createPackout = async () => {
@@ -505,23 +537,34 @@ function App() {
                 <p className="text-sm text-gray-600">Color: {packoutData.jobColor}</p>
               </div>
               <div className="space-y-2 mb-6">
-                <p className="font-medium">Enter quantities for each item:</p>
-                {packoutData.items.map((item, index) => (
-                  <div key={item.itemName} className="flex items-center gap-4">
-                    <label className="flex-1 text-sm">{item.itemName}</label>
-                    <input
-                      type="number"
-                      min="0"
-                      value={item.quantity}
-                      onChange={(e) => {
-                        const newItems = [...packoutData.items];
-                        newItems[index].quantity = parseInt(e.target.value) || 0;
-                        setPackoutData({...packoutData, items: newItems});
-                      }}
-                      className="w-24 p-2 border border-gray-300 rounded-lg"
-                    />
-                  </div>
-                ))}
+                <p className="font-medium mb-2">Enter quantities for each item:</p>
+                <div className="grid grid-cols-1 gap-2">
+                  {packoutData.items.map((item, index) => {
+                    const colorSuffix = item.itemName === 'Denny Wedges' ? '' : (colorToLetter[packoutData.jobColor] || '');
+                    const fullPartNumber = `${item.partNumber}${colorSuffix}`;
+                    
+                    return (
+                      <div key={item.itemName} className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-lg">
+                        <div className="flex-1">
+                          <span className="text-sm font-medium">{item.itemName}</span>
+                          <span className="ml-2 text-xs text-gray-500">({fullPartNumber})</span>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          value={item.quantity}
+                          onChange={(e) => {
+                            const newItems = [...packoutData.items];
+                            newItems[index].quantity = parseInt(e.target.value) || 0;
+                            setPackoutData({...packoutData, items: newItems});
+                          }}
+                          className="w-24 p-2 border border-gray-300 rounded-lg text-center"
+                          placeholder="0"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
               <div className="flex gap-3">
                 <button
@@ -540,6 +583,323 @@ function App() {
               </div>
             </>
           )}
+        </div>
+      </div>
+    );
+  };
+
+  // Packout Detail Modal - For viewing and confirming
+  const PackoutDetailModal = () => {
+    const [confirmedItems, setConfirmedItems] = useState({});
+    const [allChecked, setAllChecked] = useState(false);
+    
+    useEffect(() => {
+      if (selectedPackout) {
+        const initialChecked = {};
+        selectedPackout.items.forEach(item => {
+          if (item.quantity > 0) {
+            initialChecked[item.itemName] = false;
+          }
+        });
+        setConfirmedItems(initialChecked);
+      }
+    }, [selectedPackout]);
+
+    useEffect(() => {
+      const hasItems = Object.keys(confirmedItems).length > 0;
+      const allItemsChecked = hasItems && Object.values(confirmedItems).every(checked => checked);
+      setAllChecked(allItemsChecked);
+    }, [confirmedItems]);
+
+    const handleCheckItem = (itemName) => {
+      setConfirmedItems(prev => ({
+        ...prev,
+        [itemName]: !prev[itemName]
+      }));
+    };
+
+    const confirmPackout = async () => {
+      if (!allChecked) {
+        alert('Please confirm all items before submitting');
+        return;
+      }
+
+      setLoading(true);
+      try {
+        await airtableService.confirmPackoutItems(selectedPackout.id, selectedUser.name);
+        setShowModal('');
+        setSelectedPackout(null);
+        loadPackoutSheets();
+        alert('Packout confirmed successfully!');
+      } catch (error) {
+        console.error('Error confirming packout:', error);
+        alert('Error confirming packout');
+      }
+      setLoading(false);
+    };
+
+    if (!selectedPackout) return null;
+
+    const itemsWithQuantity = selectedPackout.items.filter(item => item.quantity > 0);
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+          <div className="mb-6">
+            <h3 className="text-2xl font-bold mb-2">Packout Details</h3>
+            <div className="text-sm text-gray-600 space-y-1">
+              <p>Job: #{selectedPackout.jobNumber} - {selectedPackout.customerName}</p>
+              <p>Color: {selectedPackout.jobColor}</p>
+              <p>Created by: {selectedPackout.createdBy} on {new Date(selectedPackout.createdAt).toLocaleDateString()}</p>
+              {selectedPackout.confirmedBy && (
+                <p className="text-green-600">Confirmed by: {selectedPackout.confirmedBy} on {new Date(selectedPackout.confirmedAt).toLocaleDateString()}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mb-6">
+            <h4 className="font-medium mb-3">Items to Pack:</h4>
+            <div className="space-y-2">
+              {itemsWithQuantity.length === 0 ? (
+                <p className="text-gray-500">No items in this packout</p>
+              ) : (
+                itemsWithQuantity.map(item => {
+                  const colorSuffix = item.itemName === 'Denny Wedges' ? '' : (colorToLetter[selectedPackout.jobColor] || '');
+                  const fullPartNumber = item.partNumber ? `${item.partNumber}${colorSuffix}` : '';
+                  
+                  return (
+                    <div key={item.itemName} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        {userRole === 'Lead Installer' && selectedPackout.status === 'pending_installer' && (
+                          <input
+                            type="checkbox"
+                            checked={confirmedItems[item.itemName] || false}
+                            onChange={() => handleCheckItem(item.itemName)}
+                            className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                          />
+                        )}
+                        <div>
+                          <span className="font-medium">{item.itemName}</span>
+                          <span className="ml-2 text-xs text-gray-500">({fullPartNumber})</span>
+                        </div>
+                      </div>
+                      <span className="font-bold text-lg">{item.quantity}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            {userRole === 'Lead Installer' && selectedPackout.status === 'pending_installer' && (
+              <button
+                onClick={confirmPackout}
+                disabled={!allChecked || loading}
+                className="flex-1 bg-green-600 text-white py-3 rounded-xl hover:bg-green-700 font-medium disabled:opacity-50"
+              >
+                {loading ? 'Confirming...' : 'Confirm All Items'}
+              </button>
+            )}
+            {userRole === 'Chop Driver' && selectedPackout.status === 'confirmed' && (
+              <button
+                onClick={() => setShowModal('returns')}
+                className="flex-1 bg-orange-600 text-white py-3 rounded-xl hover:bg-orange-700 font-medium"
+              >
+                Process Returns
+              </button>
+            )}
+            {(userRole === 'GM' || userRole === 'PM') && (
+              <p className="text-center text-gray-500 text-sm">View-only access</p>
+            )}
+            <button
+              onClick={() => {
+                setShowModal('');
+                setSelectedPackout(null);
+              }}
+              className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Returns Processing Modal
+  const ReturnsModal = () => {
+    const [returns, setReturns] = useState([]);
+    const [showConfirmation, setShowConfirmation] = useState(false);
+
+    useEffect(() => {
+      if (selectedPackout && selectedPackout.items) {
+        setReturns(
+          selectedPackout.items.filter(item => item.quantity > 0).map(item => ({
+            itemName: item.itemName,
+            partNumber: item.partNumber || '',
+            originalQty: item.quantity,
+            returnQty: 0
+          }))
+        );
+      }
+    }, [selectedPackout]);
+
+    const handleReturnQtyChange = (index, value) => {
+      const newReturns = [...returns];
+      const returnQty = parseInt(value) || 0;
+      if (returnQty <= newReturns[index].originalQty) {
+        newReturns[index].returnQty = returnQty;
+        setReturns(newReturns);
+      }
+    };
+
+    const calculateUsedItems = () => {
+      return returns.map(item => ({
+        ...item,
+        usedQty: item.originalQty - item.returnQty
+      })).filter(item => item.usedQty > 0);
+    };
+
+    const processReturns = async () => {
+      setLoading(true);
+      try {
+        const returnData = returns.map(r => ({
+          itemName: r.itemName,
+          partNumber: r.partNumber,
+          quantity: r.returnQty
+        }));
+        
+        await airtableService.processPackoutReturns(
+          selectedPackout.id,
+          returnData,
+          selectedUser.name
+        );
+        
+        setShowModal('');
+        setSelectedPackout(null);
+        loadPackoutSheets();
+        alert('Returns processed successfully! Inventory has been updated.');
+      } catch (error) {
+        console.error('Error processing returns:', error);
+        alert('Error processing returns: ' + error.message);
+      }
+      setLoading(false);
+    };
+
+    if (!selectedPackout) return null;
+
+    if (showConfirmation) {
+      const usedItems = calculateUsedItems();
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="text-center mb-6">
+              <div className="bg-yellow-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertCircle className="w-8 h-8 text-yellow-600" />
+              </div>
+              <h3 className="text-2xl font-bold mb-2">Confirm Inventory Deduction</h3>
+              <p className="text-gray-600">The following items will be deducted from inventory:</p>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
+              <h4 className="font-medium text-red-900 mb-3">Items to be deducted:</h4>
+              <div className="space-y-2">
+                {usedItems.map(item => {
+                  const colorSuffix = item.itemName === 'Denny Wedges' ? '' : (colorToLetter[selectedPackout.jobColor] || '');
+                  const fullPartNumber = item.partNumber ? `${item.partNumber}${colorSuffix}` : '';
+                  
+                  return (
+                    <div key={item.itemName} className="flex justify-between text-red-800">
+                      <span>
+                        {item.itemName} ({fullPartNumber})
+                        <span className="ml-2 text-xs">- {selectedPackout.jobColor}</span>
+                      </span>
+                      <span className="font-bold">-{item.usedQty}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowConfirmation(false)}
+                className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium"
+              >
+                Go Back
+              </button>
+              <button
+                onClick={processReturns}
+                disabled={loading}
+                className="flex-1 bg-red-600 text-white py-3 rounded-xl hover:bg-red-700 font-medium disabled:opacity-50"
+              >
+                {loading ? 'Processing...' : 'Confirm Deduction'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4 z-50">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+          <h3 className="text-2xl font-bold mb-6">Process Returns</h3>
+          <div className="mb-4 text-sm text-gray-600">
+            <p>Job: #{selectedPackout.jobNumber} - {selectedPackout.customerName}</p>
+            <p>Enter the quantity of each item being returned:</p>
+          </div>
+
+          <div className="space-y-3 mb-6">
+            {returns.filter(item => item.originalQty > 0).map((item, index) => {
+              const colorSuffix = item.itemName === 'Denny Wedges' ? '' : (colorToLetter[selectedPackout.jobColor] || '');
+              const fullPartNumber = item.partNumber ? `${item.partNumber}${colorSuffix}` : '';
+              
+              return (
+                <div key={item.itemName} className="flex items-center gap-4 p-3 border border-gray-200 rounded-lg">
+                  <div className="flex-1">
+                    <p className="font-medium">
+                      {item.itemName} 
+                      <span className="ml-2 text-xs text-gray-500">({fullPartNumber})</span>
+                    </p>
+                    <p className="text-sm text-gray-500">Packed out: {item.originalQty}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-600">Returned:</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={item.originalQty}
+                      value={item.returnQty}
+                      onChange={(e) => handleReturnQtyChange(returns.indexOf(item), e.target.value)}
+                      className="w-20 p-2 border border-gray-300 rounded-lg"
+                    />
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-red-600">
+                      Used: {item.originalQty - item.returnQty}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => setShowModal('packoutDetail')}
+              className="flex-1 bg-gray-300 text-gray-700 py-3 rounded-xl hover:bg-gray-400 font-medium"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => setShowConfirmation(true)}
+              className="flex-1 bg-orange-600 text-white py-3 rounded-xl hover:bg-orange-700 font-medium"
+            >
+              Review & Confirm
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -743,6 +1103,27 @@ function App() {
               )}
             </div>
             
+            {/* Role-specific instructions */}
+            <div className="mb-4 p-4 bg-blue-50 rounded-lg text-sm">
+              {userRole === 'Chop Driver' && (
+                <p className="text-blue-800">
+                  Create new packout sheets and process returns for confirmed jobs. 
+                  <span className="font-medium"> Confirmed sheets are ready for returns processing.</span>
+                </p>
+              )}
+              {userRole === 'Lead Installer' && (
+                <p className="text-blue-800">
+                  Review and confirm packout quantities before materials leave the warehouse.
+                  <span className="font-medium"> Click on pending sheets to confirm.</span>
+                </p>
+              )}
+              {(userRole === 'GM' || userRole === 'PM') && (
+                <p className="text-blue-800">
+                  Monitor all packout sheets across the workflow. View-only access.
+                </p>
+              )}
+            </div>
+            
             {loading ? (
               <p className="text-center text-gray-500">Loading packout sheets...</p>
             ) : packoutSheets.length === 0 ? (
@@ -752,13 +1133,18 @@ function App() {
                 {packoutSheets.map(sheet => (
                   <div
                     key={sheet.id}
-                    className="border border-gray-200 rounded-xl p-4 hover:border-gray-300 transition-all"
+                    className={`border rounded-xl p-4 hover:border-gray-300 transition-all ${
+                      sheet.status === 'completed' ? 'border-green-300 bg-green-50' : 'border-gray-200'
+                    }`}
                   >
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="font-medium text-lg">Job #{sheet.jobNumber} - {sheet.customerName}</p>
                         <p className="text-sm text-gray-600">Color: {sheet.jobColor}</p>
                         <p className="text-sm text-gray-500">Created by {sheet.createdBy} on {new Date(sheet.createdAt).toLocaleDateString()}</p>
+                        {sheet.completedBy && (
+                          <p className="text-sm text-green-600">Completed by {sheet.completedBy} on {new Date(sheet.completedAt).toLocaleDateString()}</p>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
                         <span className={`px-3 py-1 rounded-full text-sm font-medium ${
@@ -769,12 +1155,17 @@ function App() {
                           {sheet.status === 'pending_installer' ? 'Pending Installer' :
                            sheet.status === 'confirmed' ? 'Confirmed' : 'Completed'}
                         </span>
-                        <button
-                          onClick={() => setSelectedPackout(sheet)}
-                          className="text-blue-600 hover:text-blue-800"
-                        >
-                          <ChevronRight className="w-5 h-5" />
-                        </button>
+                        {sheet.status !== 'completed' && (
+                          <button
+                            onClick={() => {
+                              setSelectedPackout(sheet);
+                              setShowModal('packoutDetail');
+                            }}
+                            className="text-blue-600 hover:text-blue-800"
+                          >
+                            <ChevronRight className="w-5 h-5" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -788,6 +1179,8 @@ function App() {
       {/* Modals */}
       {showModal === 'confirmation' && <ConfirmationModal />}
       {showModal === 'createPackout' && <PackoutCreationModal />}
+      {showModal === 'packoutDetail' && <PackoutDetailModal />}
+      {showModal === 'returns' && <ReturnsModal />}
       
       {/* Item Creation Modal */}
       {showModal === 'item' && (
