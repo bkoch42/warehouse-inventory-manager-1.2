@@ -104,28 +104,26 @@ function App() {
   };
 
   const loadPackoutSheets = async () => {
-    setLoading(true);
-    try {
-      let sheets = [];
-      if (userRole === 'Chop Driver') {
-        // Show pending (to monitor) and confirmed (to process returns)
-        const pending = await airtableService.getPackoutSheets('pending_installer', warehouse);
-        const confirmed = await airtableService.getPackoutSheets('confirmed', warehouse);
-        const completed = await airtableService.getPackoutSheets('completed', warehouse);
-        sheets = [...pending, ...confirmed, ...completed];
-      } else if (userRole === 'Lead Installer') {
-        // Show only pending installer sheets
-        sheets = await airtableService.getPackoutSheets('pending_installer', warehouse);
-      } else {
-        // GM and PM see all
-        sheets = await airtableService.getPackoutSheets(null, warehouse);
-      }
-      setPackoutSheets(sheets);
-    } catch (error) {
-      console.error('Error loading packout sheets:', error);
+  setLoading(true);
+  try {
+    let sheets = [];
+    if (userRole === 'Chop Driver') {
+      // Show only pending_installer and confirmed for Chop Driver
+      sheets = await airtableService.getPackoutSheets(['pending_installer', 'confirmed'], warehouse);
+    } else if (userRole === 'Lead Installer') {
+      // Show only pending installer sheets
+      sheets = await airtableService.getPackoutSheets('pending_installer', warehouse);
+    } else {
+      // GM and PM see all
+      sheets = await airtableService.getPackoutSheets(null, warehouse);
     }
-    setLoading(false);
-  };
+    setPackoutSheets(sheets);
+  } catch (error) {
+    console.error('Error loading packout sheets:', error);
+    alert('Failed to load packout sheets');
+  }
+  setLoading(false);
+};
   
   // QR Scanner Effect
   useEffect(() => {

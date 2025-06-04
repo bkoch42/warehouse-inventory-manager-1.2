@@ -5,10 +5,74 @@ const base = new Airtable({
   apiKey: process.env.REACT_APP_AIRTABLE_ACCESS_TOKEN
 }).base(process.env.REACT_APP_AIRTABLE_BASE_ID);
 
-const table = base(process.env.REACT_APP_AIRTABLE_TABLE_NAME);
-const packoutTable = base('Packout Sheets'); // You'll need to create this table
+// Define tables using environment variables
+const table = base(process.env.REACT_APP_AIRTABLE_TABLE_NAME); // Inventory
+const usersTable = base(process.env.REACT_APP_AIRTABLE_USERS_TABLE); // Users
+const packoutTable = base(process.env.REACT_APP_AIRTABLE_PACKOUT_TABLE); // Packout Sheets
 
 export const airtableService = {
+  // Get all users by role
+  async getUsers(userRole) {
+    try {
+      const formula = userRole ? `{role} = '${userRole}'` : '';
+      const records = await usersTable
+        .select({
+          filterByFormula: formula,
+          sort: [{ field: 'name', direction: 'asc' }]
+        })
+        .all();
+      return records.map(record => ({
+        id: record.id,
+        name: record.fields.name || '',
+        role: record.fields.role || '',
+        active: record.fields.active !== false
+      }));
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      return [];
+    }
+  },
+
+  // Create a new user
+  async createUser(userData) {
+    try {
+      const record = await usersTable.create([
+        {
+          fields: {
+            name: userData.name,
+            role: userData.role,
+            active: userData.active !== false,
+            createdAt: new Date().toISOString()
+          }
+        }
+      ]);
+      return record[0];
+    } catch (error) {
+      console.error('Error creating user:', error);
+      throw error;
+    }
+  },
+
+  // Confirm packout items
+  async confirmPackoutItems(packoutId, confirmedBy) {
+    try {
+      const record = await packoutTable.update([
+        {
+          id: packoutId,
+          fields: {
+            status: 'confirmed',
+            confirmedBy: confirmedBy,
+            confirmedAt: new Date().toISOString()
+          }
+        }
+      ]);
+      return record[0];
+    } catch (error) {
+      console.error('Error confirming packout:', error);
+      throw error;
+    }
+  },
+
   // Get all items for a warehouse
   async getWarehouseItems(warehouse) {
     try {
@@ -111,8 +175,6 @@ export const airtableService = {
     }
   },
 
-  // PACKOUT SHEET FUNCTIONS
-  
   // Create a new packout sheet
   async createPackoutSheet(packoutData) {
     try {
@@ -123,10 +185,10 @@ export const airtableService = {
             customerName: packoutData.customerName,
             jobColor: packoutData.jobColor,
             warehouse: packoutData.warehouse,
-            status: 'pending_installer', // pending_installer, confirmed, completed
+            status: 'pending_installer',
             createdBy: packoutData.createdBy,
             createdAt: new Date().toISOString(),
-            items: JSON.stringify(packoutData.items) // Store as JSON
+            items: JSON.stringify(packoutData.items)
           }
         }
       ]);
@@ -137,110 +199,148 @@ export const airtableService = {
     }
   },
 
-  // Get packout sheets by status
-  async getPackoutSheets(status) {
-    try {
-      const formula = status ? `{status} = '${status}'` : '';
-      const records = await packoutTable
-        .select({
-          filterByFormula: formula,
-          sort: [{field: 'createdAt', direction: 'desc'}]
-        })
-        .all();
-      
-      return records.map(record => ({
-        id: record.id,
-        ...record.fields,
-        items: JSON.parse(record.fields.items || '[]')
-      }));
-    } catch (error) {
-      console.error('Error fetching packout sheets:', error);
-      throw error;
-    }
-  },
-
-  // Update packout sheet status
-  async updatePackoutStatus(recordId, status, confirmedBy) {
-    try {
-      const updates = {
-        status: status
-      };
-      
-      if (status === 'confirmed') {
-        updates.confirmedBy = confirmedBy;
-        updates.confirmedAt = new Date().toISOString();
-      } else if (status === 'completed') {
-        updates.completedAt = new Date().toISOString();
+  // Get packout sheets by status and warehouse
+  async getPackoutSheets(statuses, warehouse) {
+  try {
+    let formula = `{warehouse} = '${warehouse}'`;
+    if (statuses) {
+      if (Array.isArray(statuses)) {
+        const statusFilters = statuses.map(status => `{status} = '${status}'`).join(', ');
+        formula = `AND(${formula}, OR(${statusFilters}))`;
+      } else {
+        formula = `AND(${formula}, {status} = '${statuses}')`;
       }
-      
-      const record = await packoutTable.update([
-        {
-          id: recordId,
-          fields: updates
-        }
-      ]);
-      return record[0];
-    } catch (error) {
-      console.error('Error updating packout status:', error);
-      throw error;
     }
-  },
-
-  // Process packout returns (final step)
-  async processPackoutReturns(packoutId, returns) {
-    try {
-      // First get the packout sheet
-      const packoutRecord = await packoutTable.find(packoutId);
-      const originalItems = JSON.parse(packoutRecord.fields.items || '[]');
-      
-      // Calculate differences and update inventory
-      for (const item of originalItems) {
-        const returnItem = returns.find(r => r.itemName === item.itemName);
-        if (returnItem) {
-          const usedQuantity = item.quantity - returnItem.quantity;
-          
-          // Find the inventory item
-          const inventoryRecords = await table
-            .select({
-              filterByFormula: `AND({description} = '${item.itemName}', {color} = '${packoutRecord.fields.jobColor}')`
-            })
-            .all();
-          
-          if (inventoryRecords.length > 0) {
-            const inventoryRecord = inventoryRecords[0];
-            const newQuantity = Math.max(0, inventoryRecord.fields.quantity - usedQuantity);
-            
-            // Update inventory
-            await table.update([
-              {
-                id: inventoryRecord.id,
-                fields: {
-                  quantity: newQuantity,
-                  lastUpdated: new Date().toISOString(),
-                  lastUpdatedBy: 'Packout Return'
-                }
-              }
-            ]);
-          }
-        }
-      }
-      
-      // Update packout sheet with returns
-      await packoutTable.update([
-        {
-          id: packoutId,
-          fields: {
-            status: 'completed',
-            returns: JSON.stringify(returns),
-            completedAt: new Date().toISOString()
-          }
-        }
-      ]);
-      
-      return true;
-    } catch (error) {
-      console.error('Error processing packout returns:', error);
-      throw error;
-    }
+    console.log('Fetching packout sheets with formula:', formula);
+    const records = await packoutTable
+      .select({
+        filterByFormula: formula,
+        sort: [{ field: 'createdAt', direction: 'desc' }]
+      })
+      .all();
+    
+    return records.map(record => ({
+      id: record.id,
+      jobNumber: record.fields.jobNumber,
+      customerName: record.fields.customerName,
+      jobColor: record.fields.jobColor,
+      warehouse: record.fields.warehouse,
+      status: record.fields.status,
+      createdBy: record.fields.createdBy,
+      createdAt: record.fields.createdAt,
+      confirmedBy: record.fields.confirmedBy,
+      confirmedAt: record.fields.confirmedAt,
+      completedBy: record.fields.completedBy,
+      completedAt: record.fields.completedAt,
+      items: JSON.parse(record.fields.items || '[]')
+    }));
+  } catch (error) {
+    console.error('Error fetching packout sheets:', error);
+    throw error;
   }
+},
+
+  // Process packout returns
+async processPackoutReturns(packoutId, returns, completedBy) {
+  try {
+    const packoutRecord = await packoutTable.find(packoutId);
+    const originalItems = JSON.parse(packoutRecord.fields.items || '[]');
+    const jobColor = packoutRecord.fields.jobColor?.trim();
+    const warehouse = packoutRecord.fields.warehouse?.trim();
+    const jobNumber = packoutRecord.fields.jobNumber;
+
+    const getColorLetter = (color) => {
+      const colorMap = {
+        'White': 'E',
+        'Brown': 'C',
+        'Coal Gray': 'K',
+        'Musket Brown': 'M',
+        'Eggshell': 'S',
+        'Wicker': 'W',
+        'Cream': 'N',
+        'Clay': 'D',
+        'Tan': 'T',
+        'Terratone': 'U',
+        'Ivory': 'I',
+        'Light Gray': 'H',
+        'Red': 'R',
+        'Green': 'F'
+      };
+      return colorMap[color] || '';
+    };
+
+    const colorLetter = getColorLetter(jobColor);
+    if (!colorLetter) {
+      console.warn(`No color letter mapped for jobColor: ${jobColor}`);
+      throw new Error(`Invalid jobColor: ${jobColor}`);
+    }
+
+    for (const originalItem of originalItems) {
+      const returnItem = returns.find(r => r.itemName === originalItem.itemName);
+      const returnedQty = returnItem ? parseInt(returnItem.quantity, 10) : 0;
+      const usedQty = originalItem.quantity - returnedQty;
+
+      if (usedQty > 0) {
+        const itemNumber = `${originalItem.partNumber}${colorLetter}`.trim(); // e.g., 00128E
+        console.log(`Processing ${originalItem.itemName}: used ${usedQty}, itemNumber: ${itemNumber}, color: ${jobColor}, warehouse: ${warehouse}`);
+
+        const inventoryRecords = await table
+          .select({
+            filterByFormula: `AND({itemNumber} = '${itemNumber}', {color} = '${jobColor}', {warehouse} = '${warehouse}')`
+          })
+          .all();
+
+        if (inventoryRecords.length > 0) {
+          const record = inventoryRecords[0];
+          const newQuantity = Math.max(0, record.fields.quantity - usedQty);
+          console.log(`Updating inventory: ${record.fields.description} (${itemNumber}) from ${record.fields.quantity} to ${newQuantity}`);
+          await table.update([
+            {
+              id: record.id,
+              fields: {
+                quantity: newQuantity,
+                lastUpdated: new Date().toISOString(),
+                lastUpdatedBy: `Packout ${jobNumber}`
+              }
+            }
+          ]);
+        } else {
+          console.warn(`No inventory record found for itemNumber: ${itemNumber}, color: ${jobColor}, warehouse: ${warehouse}`);
+          // Optional: Create a new inventory record
+          await table.create([
+            {
+              fields: {
+                itemNumber: itemNumber,
+                description: originalItem.itemName,
+                color: jobColor,
+                warehouse: warehouse,
+                quantity: 0,
+                lastUpdated: new Date().toISOString(),
+                lastUpdatedBy: `Packout ${jobNumber}`
+              }
+            }
+          ]);
+          console.log(`Created new inventory record for ${itemNumber}`);
+        }
+      }
+    }
+
+    await packoutTable.update([
+      {
+        id: packoutId,
+        fields: {
+          status: 'completed',
+          returns: JSON.stringify(returns),
+          completedBy: completedBy,
+          completedAt: new Date().toISOString()
+        }
+      }
+    ]);
+
+    return true;
+  } catch (error) {
+    console.error('Error processing packout returns:', error);
+    throw error;
+  }
+}
 };
